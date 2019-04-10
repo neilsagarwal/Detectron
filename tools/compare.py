@@ -142,10 +142,6 @@ def main(args):
         im_list = [args.im_or_folder]
 
     for i, im_name in enumerate(im_list):
-        out_name = os.path.join(
-            args.output_dir, '{}'.format(os.path.basename(im_name) + '.' + args.output_ext)
-        )
-        logger.info('Processing {} -> {}'.format(im_name, out_name))
         im = cv2.imread(im_name)
         timers = defaultdict(Timer)
         t = time.time()
@@ -153,19 +149,16 @@ def main(args):
             cls_boxes, cls_segms, cls_keyps = infer_engine.im_detect_all(
                 model, im, None, timers=timers
             )
-        logger.info('Inference time: {:.3f}s'.format(time.time() - t))
-        for k, v in timers.items():
-            logger.info(' | {}: {:.3f}s'.format(k, v.average_time))
-        if i == 0:
-            logger.info(
-                ' \ Note: inference on the first image will be slower than the '
-                'rest (caches and auto-tuning need to warm up)'
-            )
+        #logger.info('Inference time: {:.3f}s'.format(time.time() - t))
+        #for k, v in timers.items():
+        #    logger.info(' | {}: {:.3f}s'.format(k, v.average_time))
 
-        vis_utils.vis_one_image(
+        raw_im_name = im_name.split("/")[-1]
+        print("denaturing...")
+        car_count_before, carbox_before, blackbox_before = vis_utils.vis_one_image(
             im[:, :, ::-1],  # BGR -> RGB for visualization
-            im_name,
-            args.output_dir,
+            raw_im_name,
+            '/tmp/blackout/before',
             cls_boxes,
             cls_segms,
             cls_keyps,
@@ -176,8 +169,73 @@ def main(args):
             kp_thresh=args.kp_thresh,
             ext=args.output_ext,
             out_when_no_box=args.out_when_no_box,
+            remove_class="person",
+            #find_class=["car", "bus", "truck"],
+            find_class=None,
+            denaturing=vis_utils.Denaturing.MASK
         )
 
+        tmp_loc = '/tmp/blackout/before/'+raw_im_name+'.'+args.output_ext
+        im_after = cv2.imread(tmp_loc)
+        timers = defaultdict(Timer)
+        with c2_utils.NamedCudaScope(0):
+            cls_boxes_after, cls_segms_after, cls_keyps_after = infer_engine.im_detect_all(
+                    model, im_after, None, timers=timers
+            )
+        
+        print("object detection on denatured...")
+        car_count_after, carbox_after, blackbox_after = vis_utils.vis_one_image(
+            im_after[:, :, ::-1],
+            raw_im_name,
+            '/tmp/blackout/after',
+            cls_boxes_after,
+            cls_segms_after,
+            cls_keyps_after,
+            dataset=dummy_coco_dataset,
+            box_alpha=0.3,
+            show_class=True,
+            thresh=args.thresh,
+            kp_thresh=args.kp_thresh,
+            ext=args.output_ext,
+            out_when_no_box=args.out_when_no_box,
+            remove_class=None,
+            #find_class=["car", "bus", "truck"],
+            find_class=None,
+            denaturing=None
+        )
+
+        car_change = 0.0
+        if car_count_before > 0:
+            car_change = float(car_count_after) / car_count_before
+        print ('\tvehicles {:.2f}% = {} -> {}'.format(car_change, car_count_before, car_count_after))
+
+        
+        before_centers = []
+        for car in carbox_before:
+            before_centers.append(comp_center(*car))
+        after_centers = []
+        for car in carbox_after:
+            after_centers.append(comp_center(*car))
+
+        missing = 0
+        for (x1,y1) in before_centers:
+            found = False
+            for (x2,y2) in after_centers:
+                if abs(x1-x2) < 10 and abs(y2-y1) < 10:
+                    print("({},{}) = ({},{})".format(x1,y1,x2,y2))
+                    found = True
+            if not found:
+                missing += 1
+                find_closest_person(x1,y1,blackbox_before)
+
+def find_closest_person(x,y,people):
+    pass
+
+def comp_center(x,y,w,h):
+    x2 = x + w
+    y2 = y + h
+    return ((x+x2)/2, (y+y2)/2)
+    
 
 if __name__ == '__main__':
     workspace.GlobalInit(['caffe2', '--caffe2_log_level=0'])

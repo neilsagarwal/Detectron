@@ -232,6 +232,8 @@ def vis_one_image_opencv(
             im = vis_bbox(
                 im, (bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]))
 
+            print("score={} [{:.3f},{:.3f},{:.3f},{:.3f}]".format(score, bbox[0], bbox[1], bbox[2]-bbox[0], bbox[3]-bbox[1]))
+
         # show class (off by default)
         if show_class:
             class_str = get_class_string(classes[i], score, dataset)
@@ -249,11 +251,21 @@ def vis_one_image_opencv(
 
     return im
 
+from enum import Enum
+import random
+from collections import defaultdict
+class Denaturing(Enum):
+    BOX = "BOX"
+    MASK = "MASK"
+    KSAME = "KSAME"
+    INPAINT = "INPAINT"
+
 
 def vis_one_image(
         im, im_name, output_dir, boxes, segms=None, keypoints=None, thresh=0.9,
         kp_thresh=2, dpi=200, box_alpha=0.0, dataset=None, show_class=False,
-        ext='pdf', out_when_no_box=False):
+        ext='pdf', out_when_no_box=False, remove_class=None, find_class=None, denaturing=None,
+        save=True):
     """Visual debugging of detections."""
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -264,6 +276,14 @@ def vis_one_image(
 
     if (boxes is None or boxes.shape[0] == 0 or max(boxes[:, 4]) < thresh) and not out_when_no_box:
         return
+
+    class_counts = defaultdict(int)
+    class_boxes = []
+
+    if remove_class and not isinstance(remove_class, list):
+        remove_class = [remove_class]
+    if find_class and not isinstance(find_class, list):
+        find_class = [find_class]
 
     dataset_keypoints, _ = keypoint_utils.get_keypoints()
 
@@ -276,12 +296,14 @@ def vis_one_image(
     cmap = plt.get_cmap('rainbow')
     colors = [cmap(i) for i in np.linspace(0, 1, len(kp_lines) + 2)]
 
+    plt.clf()
     fig = plt.figure(frameon=False)
     fig.set_size_inches(im.shape[1] / dpi, im.shape[0] / dpi)
     ax = plt.Axes(fig, [0., 0., 1., 1.])
     ax.axis('off')
     fig.add_axes(ax)
     ax.imshow(im)
+
 
     if boxes is None:
         sorted_inds = [] # avoid crash when 'boxes' is None
@@ -297,15 +319,38 @@ def vis_one_image(
         if score < thresh:
             continue
 
-        # show box (off by default)
-        ax.add_patch(
-            plt.Rectangle((bbox[0], bbox[1]),
-                          bbox[2] - bbox[0],
-                          bbox[3] - bbox[1],
-                          fill=False, edgecolor='g',
-                          linewidth=0.5, alpha=box_alpha))
 
-        if show_class:
+        class_text = dataset.classes[classes[i]] if dataset is not None else \
+            'id{:d}'.format(classes[i])
+
+        center = (bbox[0] + (bbox[2] - bbox[0]/ 2), bbox[1] + (bbox[3] - bbox[1])/2)
+      #  print("{}\t{}\t{}\t{}".format(i, class_text, center, bbox))
+       # if class_text == remove_class:
+       #     print("class='{}' score={} [{:.3f},{:.3f},{:.3f},{:.3f}]".format(
+       #         class_text,
+       #         score, bbox[0], bbox[1], bbox[2]-bbox[0], bbox[3]-bbox[1]))
+
+
+        class_counts[class_text] += 1
+        class_boxes.append((bbox.tolist(), class_text))
+
+        # show box (off by default)
+        if denaturing == Denaturing.BOX and class_text in remove_class:
+            ax.add_patch(
+                plt.Rectangle((bbox[0], bbox[1]),
+                              bbox[2] - bbox[0],
+                              bbox[3] - bbox[1],
+                              fill=True,
+                              facecolor='black'))
+        if remove_class is None:
+            ax.add_patch(
+                plt.Rectangle((bbox[0], bbox[1]),
+                              bbox[2] - bbox[0],
+                              bbox[3] - bbox[1],
+                              fill=False, edgecolor='g',
+                              linewidth=1.0, alpha=box_alpha))
+
+        if show_class and remove_class is None:
             ax.text(
                 bbox[0], bbox[1] - 2,
                 get_class_string(classes[i], score, dataset),
@@ -318,29 +363,43 @@ def vis_one_image(
         # show mask
         if segms is not None and len(segms) > i:
             img = np.ones(im.shape)
-            color_mask = color_list[mask_color_id % len(color_list), 0:3]
+            #color_mask = color_list[mask_color_id % len(color_list), 0:3]
+            color_mask = color_list[hash(class_text) % len(color_list), 0:3]
             mask_color_id += 1
 
-            w_ratio = .4
-            for c in range(3):
-                color_mask[c] = color_mask[c] * (1 - w_ratio) + w_ratio
+            #w_ratio = .4
+            #for c in range(3):
+            #    color_mask[c] = color_mask[c] * (1 - w_ratio) + w_ratio
             for c in range(3):
                 img[:, :, c] = color_mask[c]
             e = masks[:, :, i]
 
-            _, contour, hier = cv2.findContours(
-                e.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+            alpha = 0.4
+            edge = 'w'
+            edgewidth = 1.2
+            show_mask = denaturing is None
 
-            for c in contour:
-                polygon = Polygon(
-                    c.reshape((-1, 2)),
-                    fill=True, facecolor=color_mask,
-                    edgecolor='w', linewidth=1.2,
-                    alpha=0.5)
-                ax.add_patch(polygon)
+            if denaturing == Denaturing.MASK and class_text in remove_class:
+                color_mask = 'black'
+                alpha = 1.0
+                edge = 'black'
+                edgewidth = 0.0
+                show_mask = True
+
+            if show_mask:
+                contour, hier = cv2.findContours(
+                    e.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+
+                for c in contour:
+                    polygon = Polygon(
+                        c.reshape((-1, 2)),
+                        fill=True, facecolor=color_mask,
+                        edgecolor=edge, linewidth=edgewidth,
+                        alpha=alpha)
+                    ax.add_patch(polygon)
 
         # show keypoints
-        if keypoints is not None and len(keypoints) > i:
+        if keypoints is not None and len(keypoints) > i:# and remove_class is None:
             kps = keypoints[i]
             plt.autoscale(False)
             for l in range(len(kp_lines)):
@@ -390,5 +449,11 @@ def vis_one_image(
                     alpha=0.7)
 
     output_name = os.path.basename(im_name) + '.' + ext
-    fig.savefig(os.path.join(output_dir, '{}'.format(output_name)), dpi=dpi)
-    plt.close('all')
+    output_path = os.path.join(output_dir, '{}'.format(output_name))
+    if save:
+        fig.savefig(output_path, dpi=dpi)
+        plt.close('all')
+
+        return class_counts, class_boxes       
+    else:
+        return fig, output_path, dpi, class_counts, class_boxes

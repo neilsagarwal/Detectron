@@ -70,7 +70,7 @@ def get_detectron_ops_lib():
         for subdir in subdirs:
             ops_path = os.path.join(prefix, subdir, _DETECTRON_OPS_LIB)
             if os.path.exists(ops_path):
-                print('Found Detectron ops lib: {}'.format(ops_path))
+                #print('Found Detectron ops lib: {}'.format(ops_path))
                 return ops_path
     raise Exception('Detectron ops lib not found')
 

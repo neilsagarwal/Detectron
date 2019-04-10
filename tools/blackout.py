@@ -176,6 +176,7 @@ def main(args):
             kp_thresh=args.kp_thresh,
             ext=args.output_ext,
             out_when_no_box=args.out_when_no_box,
+            remove_class="person"
         )
 
 
