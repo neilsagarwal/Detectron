@@ -70,6 +70,8 @@ DEFAULT_OUT_EXT = 'jpg'
 DEFAULT_THRESH = 0.5
 DEFAULT_PRIVACY_THRESH = 0.5
 DEFAULT_KP_THRESH = 2.0
+PROFILE = False
+DEBUG = False
 
 def error(msg):
     sys.stderr.write("[{}] {}\n".format(colored('erro', 'red'), msg))
@@ -179,11 +181,16 @@ def parse_args():
         type=(lambda s : s.replace('[','').replace(']','').split(",")),
         required=True
     )
+    #parser.add_argument(
+    #    '--query-class',
+    #    help="List of classes of objects to query for, comma-separated",
+    #    required=True,
+    #    type=(lambda s : s.replace('[','').replace(']','').split(","))
+    #)
     parser.add_argument(
-        '--query-class',
-        help="List of classes of objects to query for, comma-separated",
-        required=True,
-        type=(lambda s : s.replace('[','').replace(']','').split(","))
+        '--nickname',
+        help="Name for this run, stored in /tmp/denature",
+        required=True
     )
     parser.add_argument(
         'video', help='video', default=None
@@ -212,9 +219,12 @@ def main(args):
     dummy_coco_dataset = dummy_datasets.get_coco_dataset()
 
     path_to_video = args.video
-    video_name = '.'.join(path_to_video.split("/")[-1].split(".")[:-1])
 
-    video_dir = os.path.join(TMP_DIR, video_name, args.denaturing.value.lower())
+    nickname = '.'.join(path_to_video.split("/")[-1].split(".")[:-1])
+    if args.nickname:
+        nickname = args.nickname
+
+    video_dir = os.path.join(TMP_DIR, nickname, args.denaturing.value.lower())
     if os.path.exists(video_dir):
         shutil.rmtree(video_dir)
     os.makedirs(video_dir)
@@ -257,141 +267,177 @@ def main(args):
     im_list = sorted(glob.iglob(os.path.join(video_dir, '*.' + args.image_ext)))
     info("Created {} frames.".format(len(im_list)))
 
-    results = {'frames' : []}
+    results_json = {}
 
+    #out = open('out.txt', 'w')
     info("Processing frames...")
     for im_name in tqdm(im_list, unit="frame", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_noinv_fmt}]"):
+
+        frame_num = os.path.basename(im_name).split(".")[0].split("_")[1]
+
         im = cv2.imread(im_name)
         timers = defaultdict(Timer)
-        t = time.time()
+        t1 = time.time()
         with c2_utils.NamedCudaScope(0):
-            cls_boxes, cls_segms, cls_keyps = infer_engine.im_detect_all(
+            original_boxes, original_segms, original_kps = infer_engine.im_detect_all(
                 model, im, None, timers=timers
             )
         t2 = time.time()
-        print("Total inference time: ", t2-t)
-        for t in timers.keys():
-            print(t, timers[t].total_time, timers[t].average_time)
+        if PROFILE:
+            for t in timers.keys():
+                print(t, timers[t].total_time, timers[t].average_time)
+            print("Total inference time: ", t2-t1)
 
-        frame_result = {}
 
-        frame_num = os.path.basename(im_name).split(".")[0].split("_")[1]
-        denatured_frame_name = 'denatured_' + frame_num
-        t = time.time()
-        before_counts, before_boxes = vis_utils.vis_one_image(
+        if isinstance(original_boxes, list):
+            original_boxes, original_segms, original_kps, original_classes = vis_utils.convert_from_cls_format(
+                    original_boxes, original_segms, original_kps)
+        if original_boxes is None or original_boxes.shape[0] == 0 or max(original_boxes[:, 4]) < args.privacy_thresh:
+            # TODO
+            pass
+
+        truth_fig = vis_utils.vis_original(
             im[:, :, ::-1],  # BGR -> RGB for visualization
-            denatured_frame_name,
-            video_dir,
-            cls_boxes,
-            cls_segms,
-            cls_keyps,
+            original_boxes,
+            original_segms,
+            original_classes,
+            args.privacy_thresh,
+            dummy_coco_dataset
+        )
+        truth_frame_name = 'truth_' + frame_num
+        truth_frame_path = os.path.join(video_dir, truth_frame_name + "." + args.output_ext)
+        truth_fig.savefig(truth_frame_path, dpi=200)
+        plt.close('all')
+
+        t1 = time.time()
+        denatured_fig = vis_utils.denature(
+            im[:, :, ::-1],  # BGR -> RGB for visualization
+            original_boxes,
+            original_segms,
+            original_classes,
             dataset=dummy_coco_dataset,
-            box_alpha=0.3,
-            show_class=False,
             thresh=args.privacy_thresh,
-            kp_thresh=args.kp_thresh,
-            ext=args.output_ext,
-            out_when_no_box=args.out_when_no_box,
-            remove_class=args.denature_class,
-            find_class=args.query_class,
+            denature_class=args.denature_class,
             denaturing=args.denaturing
         )
         t2 = time.time()
-        print("Total vis time: ", t2-t)
+        if PROFILE:
+            print("Total denature time: ", t2-t1)
+
+        denatured_frame_name = 'denatured_' + frame_num
         denatured_frame_path = os.path.join(video_dir, denatured_frame_name + "." + args.output_ext)
-        frame_result['before'] = {}
-        frame_result['before']['counts'] = before_counts
-        frame_result['before']['boxes'] = before_boxes
+        denatured_fig.savefig(denatured_frame_path, dpi=200)
+        plt.close('all')
 
-
-        im_after = cv2.imread(denatured_frame_path)
+        im_denatured = cv2.imread(denatured_frame_path)
         timers = defaultdict(Timer)
+        t1 = time.time()
         with c2_utils.NamedCudaScope(0):
-            cls_boxes_after, cls_segms_after, cls_keyps_after = infer_engine.im_detect_all(
-                    model, im_after, None, timers=timers
+            found_boxes, found_segms, found_kps = infer_engine.im_detect_all(
+                    model, im_denatured, None, timers=timers
             )
+        t2 = time.time()
+        if PROFILE:
+            for t in timers.keys():
+                print(t, timers[t].total_time, timers[t].average_time)
+            print("Total inference time: ", t2-t1)
 
-        def class_to_color(cls):
-            if cls in args.denature_class:
-                return 6
-            elif cls in args.query_class:
-                return 2
-            else:
-                return 3
-            
-        final_frame_name = 'final_' + frame_num
-        fig, output_path, dpi, after_counts, after_boxes = vis_utils.vis_one_image(
-            im_after[:, :, ::-1],
-            final_frame_name,
-            video_dir,
-            cls_boxes_after,
-            cls_segms_after,
-            cls_keyps_after,
-            dataset=dummy_coco_dataset,
-            box_alpha=0.3,
-            show_class=True,
-            thresh=args.thresh,
-            kp_thresh=args.kp_thresh,
-            ext=args.output_ext,
-            out_when_no_box=args.out_when_no_box,
-            remove_class=None,
-            find_class=args.query_class,
-            denaturing=None,
-            save=False
-        )
-        frame_result['after'] = {}
-        frame_result['after']['counts'] = after_counts
-        frame_result['after']['boxes'] = after_boxes
+        if isinstance(found_boxes, list):
+            found_boxes, found_segms, found_kps, found_classes = vis_utils.convert_from_cls_format(found_boxes, found_segms, found_kps)
+        if found_boxes is None or found_boxes.shape[0] == 0 or max(found_boxes[:, 4]) < args.privacy_thresh:
+            # TODO
+            pass
 
-        results['frames'].append(frame_result)
+        #count = 0
+        #for cid in found_classes:
+        #    if cid == 1:
+        #        count+=1
+        #out.write("{}\n".format(count))
+        #out.flush()
+        #continue
 
-        for cls in before_counts:
-            before = before_counts[cls]
-            after = after_counts[cls]
-            change = int((float(after) / before) * 100) if before > 0 else 0
-            print("{} {}% {}->{}".format(cls, change, before, after))
-
-        ax = plt.Axes(fig, [0., 0., 1., 1.])
-        ax.clear()
-        ax.axis('off')
-
-        matched = [False for i in range(len(before_boxes))]
-        for (found_box, found_cls) in after_boxes:
+        result = defaultdict(lambda: defaultdict(int))
+        result_boxes = []
+        matched = [False for i in range(len(original_boxes))]
+        for j in range(len(found_boxes)):
+            found_box = found_boxes[j, :4]
+            found_score = found_boxes[j, -1]
+            if found_score < args.privacy_thresh:
+                continue
+            found_cls = dummy_coco_dataset.classes[found_classes[j]]
             max_so_far = 0.0
             max_cls = None
             max_i = -1
-            for (i, (original_box, original_cls)) in enumerate(before_boxes):
+            for i in range(len(original_boxes)):
+                original_box = original_boxes[i, :4]
+                original_score = original_boxes[i, -1]
+                if original_score < args.privacy_thresh:
+                    continue
+                original_cls = dummy_coco_dataset.classes[original_classes[i]]
+
                 dist = iou(found_box, original_box)
-                #print("\t", dist, original_box, original_cls)
                 if dist > max_so_far:
                     max_so_far = dist
                     max_cls = original_cls
                     max_i = i 
-            print("{} {} ".format(found_cls, found_box), end='')
+            if DEBUG:
+                print("{} {} ".format(found_cls, found_box), end='')
             if max_so_far > 0.5:
                 overlap = False
                 if matched[max_i]:
                     overlap = True
                 matched[max_i] = True
                 if found_cls == max_cls:
-                    print("true-positive {}".format("overlap" if overlap else ""))
-                    draw_box(ax, found_box, "g", found_cls)
+                    if DEBUG:
+                        print("true-positive {}".format("overlap" if overlap else ""))
+                    result['true_pos'][found_cls] += 1
+                    result_boxes.append((found_box, vis_utils.Result.TRUEPOS, "{} {:.1f}".format(found_cls, found_score)))
                 else:
-                    print("misclassified ({}) {}".format(max_cls, "overlap" if overlap else ""))
-                    draw_box(ax, found_box, "purple", "f={},o={}".format(found_cls, max_cls))
+                    if DEBUG:
+                        print("misclassified ({}) {}".format(max_cls, "overlap" if overlap else ""))
+                    result['misclass']["{}->{}".format(max_cls, found_cls)] += 1
+                    result_boxes.append((found_box, vis_utils.Result.MISCLASS, "{}->{} {:.1f}".format(max_cls, found_cls, found_score)))
             else:
-                print("false-positive")
-                draw_box(ax, found_box, "orange", found_cls)
+                if DEBUG:
+                    print("false-positive")
+                result['false_pos'][found_cls] += 1
+                result_boxes.append((found_box, vis_utils.Result.FALSEPOS, "{} {:.1f}".format(found_cls, found_score)))
 
         for i in range(len(matched)):
             if not matched[i]:
-                box, cls = before_boxes[i]
-                print("{} {} false-negative".format(cls, box))
-                draw_box(ax, box, "red", cls)
+                original_box = original_boxes[i, :4]
+                original_score = original_boxes[i, -1]
+                if original_score < args.privacy_thresh:
+                    continue
+                original_cls = dummy_coco_dataset.classes[original_classes[i]]
+                if DEBUG:
+                    print("{} {} false-negative".format(original_cls, original_box))
+                result['false_neg'][original_cls] += 1
+                result_boxes.append((original_box, vis_utils.Result.FALSENEG, "{} {:.1f}".format(original_cls, original_score)))
 
-        fig.add_axes(ax)
+        final_fig = vis_utils.vis_results(
+                im_denatured[:, :, ::-1],
+                found_boxes, 
+                found_segms,
+                found_classes,
+                args.privacy_thresh,
+                dummy_coco_dataset,
+                result_boxes
+        )
+    
+        final_frame_name = 'final_' + frame_num
+        final_frame_path = os.path.join(video_dir, final_frame_name + "." + args.output_ext)
+        final_fig.savefig(final_frame_path, dpi=200)
+        plt.close('all')
+
+        results_json[str(frame_num)] = result
 
 
+        #for cls in before_counts:
+        #    before = before_counts[cls]
+        #    after = after_counts[cls]
+        #    change = int((float(after) / before) * 100) if before > 0 else 0
+        #    print("{} {}% {}->{}".format(cls, change, before, after))
 
 
         #acc_ax = plt.Axes(fig, [0.8, 0.85, 0.2, 0.08])
@@ -415,9 +461,9 @@ def main(args):
         #acc_ax.set_xlim(left=0, right=1)
         #fig.add_axes(acc_ax)
 
-        fig.savefig(output_path, dpi=dpi)
+        #fig.savefig(output_path, dpi=dpi)
 
-        final_frame_path = os.path.join(video_dir, final_frame_name + "." + args.output_ext)
+        #final_frame_path = os.path.join(video_dir, final_frame_name + "." + args.output_ext)
 
         
         #before_centers = []
@@ -439,6 +485,7 @@ def main(args):
         #        missing += 1
         #        print (x1,y1)
         #        #find_closest_person(x1,y1,blackbox_before)
+    #out.close()
 
     info("Rebuilding video...")
 
@@ -459,7 +506,7 @@ def main(args):
     ffmpeg.wait()
 
     with open(os.path.join(video_dir, 'results.json'),'w') as f:
-        f.write(json.dumps(results))
+        f.write(json.dumps(results_json))
 
     info("Done.")
 
@@ -502,6 +549,15 @@ def draw_box(ax, bbox, color, text):
     ))
     ax.text(bbox[0], bbox[1] - 2, text, fontsize=5, family='serif', color='white',
             bbox=dict(facecolor=color, alpha=0.4, pad=0, edgecolor='none'))
+
+def class_to_color(cls):
+    if cls in args.denature_class:
+        return 6
+    elif cls in args.query_class:
+        return 2
+    else:
+        return 3
+            
 
 
 if __name__ == '__main__':

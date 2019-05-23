@@ -259,7 +259,14 @@ class Denaturing(Enum):
     MASK = "MASK"
     KSAME = "KSAME"
     INPAINT = "INPAINT"
+    REPLACE = "REPLACE"
 
+class Result(Enum):
+    TRUEPOS = "TRUEPOS"
+    TRUENEG = "TRUENEG"
+    FALSEPOS = "FALSEPOS"
+    FALSENEG = "FALSENEG"
+    MISCLASS = "MISCLASS"
 
 def vis_one_image(
         im, im_name, output_dir, boxes, segms=None, keypoints=None, thresh=0.9,
@@ -271,6 +278,7 @@ def vis_one_image(
         os.makedirs(output_dir)
 
     if isinstance(boxes, list):
+
         boxes, segms, keypoints, classes = convert_from_cls_format(
             boxes, segms, keypoints)
 
@@ -457,3 +465,240 @@ def vis_one_image(
         return class_counts, class_boxes       
     else:
         return fig, output_path, dpi, class_counts, class_boxes
+
+def denature(im, boxes, segms, classes, dataset=None, thresh=0.9, denature_class=None, denaturing=None, dpi=200):
+
+    plt.clf()
+    fig = plt.figure(frameon=False)
+    fig.set_size_inches(im.shape[1] / dpi, im.shape[0] / dpi)
+    ax = plt.Axes(fig, [0., 0., 1., 1.])
+    ax.axis('off')
+    fig.add_axes(ax)
+    ax.imshow(im)
+
+    if boxes is None:
+        sorted_inds = [] # avoid crash when 'boxes' is None
+    else:
+        # Display in largest to smallest order to reduce occlusion
+        areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        sorted_inds = np.argsort(-areas)
+
+    if denaturing is Denaturing.REPLACE:
+        from PIL import Image
+        car = Image.open('/home/ubuntu/car.jpeg')
+    for i in sorted_inds:
+        bbox = boxes[i, :4]
+        if boxes[i, -1] < thresh:
+            continue
+        
+        class_text = dataset.classes[classes[i]]
+
+        if class_text in denature_class:
+            if denaturing is Denaturing.BOX or denaturing is Denaturing.REPLACE:
+                #print('===')
+                #print(im.shape)
+                #print(bbox)
+                ax.add_patch(
+                    plt.Rectangle((bbox[0], bbox[1]),
+                                  bbox[2] - bbox[0],
+                                  bbox[3] - bbox[1],
+                                  fill=True,
+                                  facecolor='white'))
+            elif denaturing is Denaturing.MASK:
+                if segms is not None and len(segms) > 0:
+                    masks = mask_util.decode(segms)
+                e = masks[:, :, i]
+                contour, hier = cv2.findContours(e.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+                for c in contour:
+                    polygon = Polygon(
+                        c.reshape((-1, 2)),
+                        fill=True, facecolor='black',
+                        edgecolor='black', linewidth=0.0,
+                        alpha=1.0)
+                    ax.add_patch(polygon)
+            if denaturing is Denaturing.REPLACE:
+                loc = [
+                    float(bbox[0]) / im.shape[1], 
+                    1-(float(bbox[3]) / im.shape[0]),
+                    float(bbox[2] - bbox[0]) / im.shape[1],
+                    float(bbox[3] - bbox[1]) / im.shape[0]
+                ]
+                imgax = fig.add_axes(loc)
+                car_ = car.resize((bbox[2]-bbox[0],bbox[3]-bbox[1]), Image.ANTIALIAS)
+                imgax.imshow(car_)
+                imgax.axis('off')
+                #print("{:.2f},{:.2f},{:.2f},{:.2f}".format(*loc))
+    return fig
+
+def vis_results(im, boxes, segms, classes, thresh, dataset, results, dpi=200):
+
+    plt.clf()
+    fig = plt.figure(frameon=False)
+    fig.set_size_inches(im.shape[1] / dpi, im.shape[0] / dpi)
+    ax = plt.Axes(fig, [0., 0., 1., 1.])
+    ax.axis('off')
+    fig.add_axes(ax)
+    ax.imshow(im)
+
+    #if boxes is None:
+    #    sorted_inds = []
+    #else:
+    #    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    #    sorted_inds = np.argsort(-areas)
+
+    #for i in sorted_inds:
+    #    bbox = boxes[i, :4]
+    #    score = boxes[i, -1]
+    #    if score < thresh:
+    #        continue
+
+    #    class_text = dataset.classes[classes[i]]
+
+    for (bbox, result, text) in results:
+
+        color = 'green'
+        if result == Result.FALSENEG:
+            color = 'red'
+        elif result == Result.FALSEPOS:
+            color = 'yellow'
+        elif result == Result.MISCLASS:
+            color = 'purple'
+
+        ax.add_patch(
+            plt.Rectangle((bbox[0], bbox[1]),
+                          bbox[2] - bbox[0],
+                          bbox[3] - bbox[1],
+                          fill=False, edgecolor=color,
+                          linewidth=1.0, alpha=0.3))
+
+        ax.text(
+            bbox[0], bbox[1] - 2,
+            text,
+            #get_class_string(classes[i], score, dataset),
+            fontsize=3,
+            family='serif',
+            bbox=dict(
+                facecolor=color, alpha=0.4, pad=0, edgecolor='none'),
+            color='white')
+
+    return fig
+
+def vis_original(im, boxes, segms, classes, thresh, dataset, dpi=200):
+
+    plt.clf()
+    fig = plt.figure(frameon=False)
+    fig.set_size_inches(im.shape[1] / dpi, im.shape[0] / dpi)
+    ax = plt.Axes(fig, [0., 0., 1., 1.])
+    ax.axis('off')
+    fig.add_axes(ax)
+    ax.imshow(im)
+
+    if boxes is None:
+        sorted_inds = []
+    else:
+        areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        sorted_inds = np.argsort(-areas)
+
+    for i in sorted_inds:
+        bbox = boxes[i, :4]
+        score = boxes[i, -1]
+        if score < thresh:
+            continue
+
+        text = get_class_string(classes[i], score, dataset)
+        color = 'green'
+
+        ax.add_patch(
+            plt.Rectangle((bbox[0], bbox[1]),
+                          bbox[2] - bbox[0],
+                          bbox[3] - bbox[1],
+                          fill=False, edgecolor=color,
+                          linewidth=1.0, alpha=0.3))
+
+        ax.text(
+            bbox[0], bbox[1] - 2,
+            text,
+            fontsize=3,
+            family='serif',
+            bbox=dict(
+                facecolor=color, alpha=0.4, pad=0, edgecolor='none'),
+            color='white')
+
+    return fig
+
+from detectron.utils.tracker import find_centroid
+
+def vis_ids(im, ids, new_ids, dpi=200):
+
+    plt.clf()
+    fig = plt.figure(frameon=False)
+    fig.set_size_inches(im.shape[1] / dpi, im.shape[0] / dpi)
+    ax = plt.Axes(fig, [0., 0., 1., 1.])
+    ax.axis('off')
+    fig.add_axes(ax)
+    ax.imshow(im)
+
+    for (uid, bbox) in ids.items():
+        if bbox is None:
+            continue
+
+        text = str(uid)
+        color = 'green'
+        if uid in new_ids:
+            color = 'orange'
+
+        ax.add_patch(
+            plt.Rectangle((bbox[0], bbox[1]),
+                          bbox[2] - bbox[0],
+                          bbox[3] - bbox[1],
+                          fill=False, edgecolor=color,
+                          linewidth=1.0, alpha=0.3))
+
+        ax.text(
+            #*find_centroid(bbox),
+            bbox[0], bbox[1] ,
+            text,
+            fontsize=6,
+            family='serif',
+            bbox=dict(
+                facecolor=color, alpha=0.3, pad=0, edgecolor='none'),
+            color='white')
+
+    return fig
+
+
+def vis_sort(im, boxes, dpi=200):
+
+    plt.clf()
+    fig = plt.figure(frameon=False)
+    fig.set_size_inches(im.shape[1] / dpi, im.shape[0] / dpi)
+    ax = plt.Axes(fig, [0., 0., 1., 1.])
+    ax.axis('off')
+    fig.add_axes(ax)
+    ax.imshow(im)
+
+    for bbox in boxes:
+        text = str(bbox[-1])
+        color = 'green'
+
+        #if uid in new_ids:
+        #    color = 'orange'
+
+        ax.add_patch(
+            plt.Rectangle((bbox[0], bbox[1]),
+                          bbox[2] - bbox[0],
+                          bbox[3] - bbox[1],
+                          fill=False, edgecolor=color,
+                          linewidth=1.0, alpha=0.3))
+
+        ax.text(
+            #*find_centroid(bbox),
+            bbox[0], bbox[1] ,
+            text,
+            fontsize=6,
+            family='serif',
+            bbox=dict(
+                facecolor=color, alpha=0.3, pad=0, edgecolor='none'),
+            color='white')
+
+    return fig
