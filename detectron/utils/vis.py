@@ -667,7 +667,7 @@ def vis_ids(im, ids, new_ids, dpi=200):
     return fig
 
 
-def vis_sort(im, boxes, dpi=200):
+def vis_sort(im, boxes, id_to_color, new_ids, dpi=200):
 
     plt.clf()
     fig = plt.figure(frameon=False)
@@ -678,8 +678,9 @@ def vis_sort(im, boxes, dpi=200):
     ax.imshow(im)
 
     for bbox in boxes:
-        text = str(bbox[-1])
-        color = 'green'
+        uid = bbox[-1]
+        text = str(uid)
+        color = id_to_color[uid]
 
         #if uid in new_ids:
         #    color = 'orange'
@@ -688,14 +689,14 @@ def vis_sort(im, boxes, dpi=200):
             plt.Rectangle((bbox[0], bbox[1]),
                           bbox[2] - bbox[0],
                           bbox[3] - bbox[1],
-                          fill=False, edgecolor=color,
-                          linewidth=1.0, alpha=0.3))
+                          fill=(uid in new_ids), edgecolor=color,
+                          linewidth=1.0, alpha=0.5))
 
         ax.text(
             #*find_centroid(bbox),
             bbox[0], bbox[1] ,
             text,
-            fontsize=6,
+            fontsize=4,
             family='serif',
             bbox=dict(
                 facecolor=color, alpha=0.3, pad=0, edgecolor='none'),

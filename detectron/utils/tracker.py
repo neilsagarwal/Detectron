@@ -9,13 +9,14 @@ def find_centroid(box):
     return (int((x+x2)/2), int((y+y2)/2))
 
 class ObjectTracker(object):
-    MISSING_THRESHOLD = 5
+    MISSING_THRESHOLD = 25
 
-    def __init__(self):
+    def __init__(self, method='centroid'):
         self.next_id = 1
         self.old_obj = OrderedDict()
         self.box_map = OrderedDict()
         self.last_seen = OrderedDict()
+        self.method = method
 
     def update(self, boxes):
 
@@ -23,12 +24,13 @@ class ObjectTracker(object):
             to_forget = []
             for obj_id in self.last_seen.keys():
                 self.last_seen[obj_id] += 1
-                self.box_map[obj_id] = None
+                #self.box_map[obj_id] = None
                 if self.last_seen[obj_id] > ObjectTracker.MISSING_THRESHOLD:
                     to_forget.append(obj_id)
             for obj_id in to_forget:
                 self.forget(obj_id)
-            return self.box_map
+            #return self.box_map
+            return boxes
 
         new_obj = np.zeros((len(boxes), 2), dtype="int")
         for i in range(len(boxes)):
@@ -54,7 +56,8 @@ class ObjectTracker(object):
                     continue
                 obj_id = old_ids[oi]
                 self.old_obj[obj_id] = new_obj[ni]
-                self.box_map[obj_id] = boxes[ni]
+                #self.box_map[obj_id] = boxes[ni]
+                boxes[ni][-1] = obj_id
                 self.last_seen[obj_id] = 0
                 old_matched.add(oi)
                 new_matched.add(ni)
@@ -68,14 +71,15 @@ class ObjectTracker(object):
                 for oi in old_not_matched:
                     obj_id = old_ids[oi]
                     self.last_seen[obj_id] += 1
-                    self.box_map[obj_id] = None
+                    #self.box_map[obj_id] = None
                     if self.last_seen[obj_id] > ObjectTracker.MISSING_THRESHOLD:
                         self.forget(obj_id)
             else:
                 for ni in new_not_matched:
                     self.register(new_obj[ni], boxes[ni])
 
-        return self.box_map
+        #return self.box_map
+        return boxes
 
     def register(self, center, box):
         self.old_obj[self.next_id] = center

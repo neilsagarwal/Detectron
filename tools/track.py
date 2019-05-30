@@ -175,6 +175,10 @@ def parse_args():
         help="FPS of the final denatured video"
     )
     parser.add_argument(
+        '--tracker',
+        help="Which object tracking algorithm to use: (" + "|".join(tracking_algs) + ")"
+    )
+    parser.add_argument(
         '--track-class',
         help="Class of objects to track",
         type=(lambda s : s.replace('[','').replace(']','').split(",")),
@@ -200,9 +204,14 @@ def parse_args():
     return parser.parse_args()
 
 TMP_DIR = '/tmp/track'
+tracking_algs = ['sort', 'centroid', 'iou']
 
 def main(args):
     logger = logging.getLogger(__name__)
+
+    if not args.tracker in tracking_algs:
+        logger.error('Unknown tracking algorithm. Available algorithms are: {}'.format(','.join(tracking_algs)))
+        sys.exit(1)
 
     merge_cfg_from_file(args.cfg)
     cfg.NUM_GPUS = 1
@@ -264,15 +273,29 @@ def main(args):
     ffmpeg.wait()
 
     im_list = sorted(glob.iglob(os.path.join(video_dir, '*.' + args.image_ext)))
-    info("Created {} frames.".format(len(im_list)))
+
+    num_frames = len(im_list)
+    h,m,s = args.length.split(":")
+    total_length_seconds = float(h)*3600 + float(m) * 60 + float(s)
+    frame_length = total_length_seconds / num_frames
+    info("Created {} frames, each represent {:.3f} seconds".format(len(im_list), frame_length))
 
     results_json = {}
 
-    tracker = ObjectTracker()
+
+    if args.tracker == 'centroid':
+        tracker = ObjectTracker(method='centroid')
+    elif args.tracker == 'iou':
+        tracker = ObjectTracker(method='iou')
+    elif args.tracker == 'sort':
+        tracker = sort.Sort()
+
+    # Object Tracking state
     ooi = {}
     seen = set()
-
-    mot_tracker = sort.Sort()
+    all_colors = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080', '#ffffff', '#000000']
+    id_to_color = {}
+    color_i = 0
 
     #out = open('out.txt', 'w')
     info("Processing frames...")
@@ -298,35 +321,37 @@ def main(args):
             original_boxes, original_segms, original_kps, original_classes = vis_utils.convert_from_cls_format(
                     original_boxes, original_segms, original_kps)
         if original_boxes is None or original_boxes.shape[0] == 0 or max(original_boxes[:, 4]) < args.privacy_thresh:
-            # TODO
-            pass
+            logger.warn("No bounding boxes found!")
+            continue
  
         boi = np.zeros((len(original_classes), 5), dtype=int)
-        #boi = []
         for i in range(len(original_classes)):
             cls = dummy_coco_dataset.classes[original_classes[i]]
             if cls in args.track_class and original_boxes[i, -1] >= args.thresh:
                 boi[i] = original_boxes[i]
-                #boi.append(original_boxes[i])
-        box_map = tracker.update(boi)
-        track_bbs_ids = mot_tracker.update(boi)
+        
+        if args.tracker == 'centroid':
+            track_bbs_ids = tracker.update(boi)
+            #ids_in_frame = set(box_map.keys())
+        elif args.tracker == 'iou':
+            track_bbs_ids = tracker.update(boi)
+        elif args.tracker == 'sort':
+            track_bbs_ids = mot_tracker.update(boi).astype(int)
 
-        print("===")
-        print(track_bbs_ids)
-        print("===")
-
-        ids_in_frame = set(box_map.keys())
+        ids_in_frame = set(track_bbs_ids[:, -1])
+        for uid in ids_in_frame:
+            if not uid in id_to_color:
+                id_to_color[uid] = all_colors[color_i]
+                color_i = (color_i + 1) % len(all_colors)
+        print("im_name", ids_in_frame)
         new_ids = seen.symmetric_difference(ids_in_frame)
 
         ids_fig = vis_utils.vis_sort(
             im[:, :, ::-1],  # BGR -> RGB for visualization
-            track_bbs_ids
+            track_bbs_ids, 
+            id_to_color,
+            new_ids
         )
-        #ids_fig = vis_utils.vis_ids(
-        #    im[:, :, ::-1],  # BGR -> RGB for visualization
-        #    box_map,
-        #    new_ids
-        #)
         seen.update(ids_in_frame)
 
         ids_frame_name = 'ids_' + frame_num
