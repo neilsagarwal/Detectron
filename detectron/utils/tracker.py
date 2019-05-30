@@ -1,24 +1,67 @@
 from collections import OrderedDict
 from scipy.spatial.distance import cdist as pairwise_dist
 import numpy as np
+from enum import Enum
+
+import sys
+sys.path.append("/home/ubuntu/sort")
+import sort
 
 def find_centroid(box):
     x,y,w,h,_ = box
     x2 = x + w
     y2 = y + h
     return (int((x+x2)/2), int((y+y2)/2))
+def iou(a,b):
+    x_left = max(a[0], b[0])
+    x_right = min(a[2], b[2])
+    y_bottom = max(a[1], b[1])
+    y_top = min(a[3], b[3])
+    if x_left > x_right or y_bottom > y_top:
+        return 0.0
+    intersection = float((x_right - x_left) * (y_top - y_bottom))
+    a_area = (a[3] - a[1]) * (a[2] - a[0])
+    b_area = (b[3] - b[1]) * (b[2] - b[0])
+    union = float(a_area + b_area - intersection)
+    if union <= 0:
+        return 0
+    iou = intersection / union
+    return iou
+
+class TrackingMethod(Enum):
+    CENTROID = 1
+    IOU = 2
+    SORT = 3
 
 class ObjectTracker(object):
     MISSING_THRESHOLD = 25
 
-    def __init__(self, method='centroid'):
+
+    def __init__(self, method=TrackingMethod.CENTROID):
         self.next_id = 1
         self.old_obj = OrderedDict()
         self.box_map = OrderedDict()
         self.last_seen = OrderedDict()
         self.method = method
+        if self.method == TrackingMethod.CENTROID:
+            self.metric = 'euclidean'
+            self.update = self.update_dist
+        elif self.method == TrackingMethod.IOU:
+            self.metric = iou
+            self.update = self.update_dist
+        elif self.method == TrackingMethod.SORT:
+            self.sort = sort.Sort()
+            self.update = self.update_sort
+        self.watching = {}
+        
+            
+    def update_sort(self, boxes, frame_num):
+        ids = self.sort.update(boxes).astype(int)
+        self.watch(ids, frame_num)
+        return ids
 
-    def update(self, boxes):
+
+    def update_dist(self, boxes, frame_num):
 
         if len(boxes) == 0:
             to_forget = []
@@ -32,19 +75,24 @@ class ObjectTracker(object):
             #return self.box_map
             return boxes
 
-        new_obj = np.zeros((len(boxes), 2), dtype="int")
-        for i in range(len(boxes)):
-            new_obj[i] = find_centroid(boxes[i])
+        if self.method == TrackingMethod.CENTROID:
+            new_obj = np.zeros((len(boxes), 2), dtype="int")
+            for i in range(len(boxes)):
+                new_obj[i] = find_centroid(boxes[i])
+        elif self.method == TrackingMethod.IOU:
+            #new_obj = np.zeros((len(boxes), 5), dtype="int")
+            new_obj = np.copy(boxes)
 
         if len(self.old_obj) == 0:
             for i in range(0, len(new_obj)):
-                self.register(new_obj[i], boxes[i])
+                uid = self.register(new_obj[i], boxes[i])
+                boxes[i, -1] = uid
         else:
 
             old_ids = list(self.old_obj.keys())
             old_obj = np.array(list(self.old_obj.values()))
 
-            D = pairwise_dist(old_obj, new_obj)
+            D = pairwise_dist(old_obj, new_obj, metric=self.metric)
 
             old_matched = set()
             new_matched = set()
@@ -53,10 +101,12 @@ class ObjectTracker(object):
             new_ind = D.argmin(axis=1)[old_ind]
             for (oi, ni) in zip(old_ind, new_ind):
                 if oi in old_matched or ni in new_matched:
+                    print("*", oi, ni)
                     continue
                 obj_id = old_ids[oi]
                 self.old_obj[obj_id] = new_obj[ni]
                 #self.box_map[obj_id] = boxes[ni]
+                print(ni, obj_id)
                 boxes[ni][-1] = obj_id
                 self.last_seen[obj_id] = 0
                 old_matched.add(oi)
@@ -76,16 +126,30 @@ class ObjectTracker(object):
                         self.forget(obj_id)
             else:
                 for ni in new_not_matched:
-                    self.register(new_obj[ni], boxes[ni])
+                    uid = self.register(new_obj[ni], boxes[ni])
+                    boxes[i, -1] = uid
 
-        #return self.box_map
+        self.watch(boxes, frame_num)
         return boxes
 
+    def watch(self, boxes, frame_num):
+        for box in boxes:
+            uid = box[-1]
+            if uid in self.watching:
+                self.watching[uid][1] = frame_num
+            else:
+                self.watching[uid] = [frame_num, frame_num]
+
+    def get_watch_results(self):
+        return self.watching
+
     def register(self, center, box):
-        self.old_obj[self.next_id] = center
-        self.box_map[self.next_id] = box
-        self.last_seen[self.next_id] = 0
+        uid = self.next_id
+        self.old_obj[uid] = center
+        self.box_map[uid] = box
+        self.last_seen[uid] = 0
         self.next_id += 1
+        return uid
 
     def forget(self, obj_id):
         del self.old_obj[obj_id]

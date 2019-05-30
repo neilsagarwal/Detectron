@@ -49,7 +49,7 @@ import detectron.core.test_engine as infer_engine
 import detectron.datasets.dummy_datasets as dummy_datasets
 import detectron.utils.c2 as c2_utils
 import detectron.utils.vis as vis_utils
-from detectron.utils.tracker import ObjectTracker
+from detectron.utils.tracker import ObjectTracker, TrackingMethod
 
 import detectron.utils.env as envu
 envu.set_up_matplotlib()
@@ -284,9 +284,9 @@ def main(args):
 
 
     if args.tracker == 'centroid':
-        tracker = ObjectTracker(method='centroid')
+        tracker = ObjectTracker(method=TrackingMethod.CENTROID)
     elif args.tracker == 'iou':
-        tracker = ObjectTracker(method='iou')
+        tracker = ObjectTracker(method=TrackingMethod.IOU)
     elif args.tracker == 'sort':
         tracker = sort.Sort()
 
@@ -324,25 +324,33 @@ def main(args):
             logger.warn("No bounding boxes found!")
             continue
  
-        boi = np.zeros((len(original_classes), 5), dtype=int)
+        #boi = np.zeros((len(original_classes), 5), dtype=int)
+        boi = np.empty((0,5), dtype=int)
         for i in range(len(original_classes)):
             cls = dummy_coco_dataset.classes[original_classes[i]]
             if cls in args.track_class and original_boxes[i, -1] >= args.thresh:
-                boi[i] = original_boxes[i]
+                #boi[i] = original_boxes[i]
+                boi = np.append(boi, [original_boxes[i]], axis=0)
         
-        if args.tracker == 'centroid':
-            track_bbs_ids = tracker.update(boi)
+        #if args.tracker == 'centroid':
+        #    track_bbs_ids = tracker.update(boi)
             #ids_in_frame = set(box_map.keys())
-        elif args.tracker == 'iou':
-            track_bbs_ids = tracker.update(boi)
-        elif args.tracker == 'sort':
-            track_bbs_ids = mot_tracker.update(boi).astype(int)
+        #elif args.tracker == 'iou':
+        #    track_bbs_ids = tracker.update(boi)
+        #elif args.tracker == 'sort':
+        #    track_bbs_ids = mot_tracker.update(boi).astype(int)
+        print(boi)
+        print("====")
+        track_bbs_ids = tracker.update(boi, frame_num)
+        print(track_bbs_ids)
+        
 
         ids_in_frame = set(track_bbs_ids[:, -1])
         for uid in ids_in_frame:
             if not uid in id_to_color:
                 id_to_color[uid] = all_colors[color_i]
                 color_i = (color_i + 1) % len(all_colors)
+        
         print("im_name", ids_in_frame)
         new_ids = seen.symmetric_difference(ids_in_frame)
 
