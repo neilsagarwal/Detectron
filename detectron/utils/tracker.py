@@ -34,14 +34,13 @@ class TrackingMethod(Enum):
     SORT = 3
 
 class ObjectTracker(object):
-    MISSING_THRESHOLD = 25
 
-
-    def __init__(self, method=TrackingMethod.CENTROID):
+    def __init__(self, missing_threshold=25, method=TrackingMethod.CENTROID):
         self.next_id = 1
         self.old_obj = OrderedDict()
         self.box_map = OrderedDict()
         self.last_seen = OrderedDict()
+        self.missing_threshold = missing_threshold
         self.method = method
         if self.method == TrackingMethod.CENTROID:
             self.metric = 'euclidean'
@@ -68,7 +67,7 @@ class ObjectTracker(object):
             for obj_id in self.last_seen.keys():
                 self.last_seen[obj_id] += 1
                 #self.box_map[obj_id] = None
-                if self.last_seen[obj_id] > ObjectTracker.MISSING_THRESHOLD:
+                if self.last_seen[obj_id] > self.missing_threshold:
                     to_forget.append(obj_id)
             for obj_id in to_forget:
                 self.forget(obj_id)
@@ -97,16 +96,21 @@ class ObjectTracker(object):
             old_matched = set()
             new_matched = set()
 
-            old_ind = D.min(axis=1).argsort()
-            new_ind = D.argmin(axis=1)[old_ind]
+            if self.method == TrackingMethod.CENTROID:
+                old_ind = D.min(axis=1).argsort()
+            elif self.method == TrackingMethod.IOU:
+                old_ind = D.max(axis=1).argsort()
+            if self.method == TrackingMethod.CENTROID:
+                new_ind = D.argmin(axis=1)[old_ind]
+            elif self.method == TrackingMethod.IOU:
+                new_ind = D.argmax(axis=1)[old_ind]
+
             for (oi, ni) in zip(old_ind, new_ind):
                 if oi in old_matched or ni in new_matched:
-                    print("*", oi, ni)
                     continue
                 obj_id = old_ids[oi]
                 self.old_obj[obj_id] = new_obj[ni]
                 #self.box_map[obj_id] = boxes[ni]
-                print(ni, obj_id)
                 boxes[ni][-1] = obj_id
                 self.last_seen[obj_id] = 0
                 old_matched.add(oi)
@@ -122,12 +126,12 @@ class ObjectTracker(object):
                     obj_id = old_ids[oi]
                     self.last_seen[obj_id] += 1
                     #self.box_map[obj_id] = None
-                    if self.last_seen[obj_id] > ObjectTracker.MISSING_THRESHOLD:
+                    if self.last_seen[obj_id] > self.missing_threshold:
                         self.forget(obj_id)
             else:
                 for ni in new_not_matched:
                     uid = self.register(new_obj[ni], boxes[ni])
-                    boxes[i, -1] = uid
+                    boxes[ni, -1] = uid
 
         self.watch(boxes, frame_num)
         return boxes
@@ -140,8 +144,10 @@ class ObjectTracker(object):
             else:
                 self.watching[uid] = [frame_num, frame_num]
 
-    def get_watch_results(self):
-        return self.watching
+    def write_watch_results(self):
+        import json
+        with open('./watch_results', 'w') as f:
+            f.write(json.dumps(self.watching))
 
     def register(self, center, box):
         uid = self.next_id

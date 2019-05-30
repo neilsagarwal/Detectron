@@ -297,6 +297,7 @@ def main(args):
     id_to_color = {}
     color_i = 0
 
+    local_results = []
     #out = open('out.txt', 'w')
     info("Processing frames...")
     for im_name in tqdm(im_list, unit="frame", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_noinv_fmt}]"):
@@ -331,18 +332,8 @@ def main(args):
             if cls in args.track_class and original_boxes[i, -1] >= args.thresh:
                 #boi[i] = original_boxes[i]
                 boi = np.append(boi, [original_boxes[i]], axis=0)
-        
-        #if args.tracker == 'centroid':
-        #    track_bbs_ids = tracker.update(boi)
-            #ids_in_frame = set(box_map.keys())
-        #elif args.tracker == 'iou':
-        #    track_bbs_ids = tracker.update(boi)
-        #elif args.tracker == 'sort':
-        #    track_bbs_ids = mot_tracker.update(boi).astype(int)
-        print(boi)
-        print("====")
+
         track_bbs_ids = tracker.update(boi, frame_num)
-        print(track_bbs_ids)
         
 
         ids_in_frame = set(track_bbs_ids[:, -1])
@@ -351,7 +342,7 @@ def main(args):
                 id_to_color[uid] = all_colors[color_i]
                 color_i = (color_i + 1) % len(all_colors)
         
-        print("im_name", ids_in_frame)
+        local_results.append(track_bbs_ids[:, -1].tolist())
         new_ids = seen.symmetric_difference(ids_in_frame)
 
         ids_fig = vis_utils.vis_sort(
@@ -367,6 +358,10 @@ def main(args):
         ids_fig.savefig(ids_frame_path, dpi=200)
         plt.close('all')
 
+    tracker.write_watch_results()
+    import json
+    with open('./local_results', 'w') as f:
+        f.write(json.dumps(local_results))
 
     info("Rebuilding video...")
 
