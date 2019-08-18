@@ -35,12 +35,14 @@ class TrackingMethod(Enum):
 
 class ObjectTracker(object):
 
-    def __init__(self, missing_threshold=25, method=TrackingMethod.CENTROID):
+    def __init__(self, missing_threshold=25, method=TrackingMethod.CENTROID, max_dist=100):
         self.next_id = 1
+        self.name="{},missing={},max={}".format(str(method).split(".")[1], missing_threshold,max_dist)
         self.old_obj = OrderedDict()
         self.box_map = OrderedDict()
         self.last_seen = OrderedDict()
         self.missing_threshold = missing_threshold
+        self.max_dist = max_dist
         self.method = method
         if self.method == TrackingMethod.CENTROID:
             self.metric = 'euclidean'
@@ -108,6 +110,8 @@ class ObjectTracker(object):
             for (oi, ni) in zip(old_ind, new_ind):
                 if oi in old_matched or ni in new_matched:
                     continue
+                if D[oi][ni] > self.max_dist:
+                    continue
                 obj_id = old_ids[oi]
                 self.old_obj[obj_id] = new_obj[ni]
                 #self.box_map[obj_id] = boxes[ni]
@@ -138,7 +142,7 @@ class ObjectTracker(object):
 
     def watch(self, boxes, frame_num):
         for box in boxes:
-            uid = box[-1]
+            uid = str(box[-1])
             if uid in self.watching:
                 self.watching[uid][1] = frame_num
             else:
@@ -148,6 +152,12 @@ class ObjectTracker(object):
         import json
         with open('./watch_results', 'w') as f:
             f.write(json.dumps(self.watching))
+
+    def get_watch_results(self):
+        return self.watching
+
+    def get_name(self):
+        return self.name
 
     def register(self, center, box):
         uid = self.next_id
