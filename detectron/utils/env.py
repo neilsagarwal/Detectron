@@ -87,5 +87,6 @@ def get_custom_ops_lib():
 
 
 # YAML load/dump function aliases
-yaml_load = yaml.load
+# https://github.com/facebookresearch/Detectron/issues/840
+yaml_load = lambda x: yaml.load(x, Loader=yaml.Loader) # yaml.load
 yaml_dump = yaml.dump
