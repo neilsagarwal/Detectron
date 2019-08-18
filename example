@@ -1,0 +1,2 @@
+python tools/track.py /streams/mlk_spruce/03252019-2102+180.mp4 --clip --start 00:00:00 --length 01:00:00.0 --sample-rate 4 --track-class person --rebuild-rate 4 --nickname mlk_spruce --tracker centroi
+d
