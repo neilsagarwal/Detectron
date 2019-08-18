@@ -283,12 +283,19 @@ def main(args):
     results_json = {}
 
 
-    if args.tracker == 'centroid':
-        tracker = ObjectTracker(method=TrackingMethod.CENTROID)
-    elif args.tracker == 'iou':
-        tracker = ObjectTracker(method=TrackingMethod.IOU)
-    elif args.tracker == 'sort':
-        tracker = sort.Sort()
+    #if args.tracker == 'centroid':
+    #    tracker = ObjectTracker(method=TrackingMethod.CENTROID)
+    #elif args.tracker == 'iou':
+    #    tracker = ObjectTracker(method=TrackingMethod.IOU)
+    #elif args.tracker == 'sort':
+    #    tracker = sort.Sort()
+    trackers = [
+        ObjectTracker(method=TrackingMethod.CENTROID, missing_threshold=5),
+        ObjectTracker(method=TrackingMethod.IOU, missing_threshold=5),
+        ObjectTracker(method=TrackingMethod.IOU, missing_threshold=25),
+        ObjectTracker(method=TrackingMethod.SORT, missing_threshold=10),
+        ObjectTracker(method=TrackingMethod.CENTROID, missing_threshold=25),
+    ]
 
     # Object Tracking state
     ooi = {}
@@ -297,7 +304,6 @@ def main(args):
     id_to_color = {}
     color_i = 0
 
-    local_results = []
     #out = open('out.txt', 'w')
     info("Processing frames...")
     for im_name in tqdm(im_list, unit="frame", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_noinv_fmt}]"):
@@ -331,9 +337,10 @@ def main(args):
             cls = dummy_coco_dataset.classes[original_classes[i]]
             if cls in args.track_class and original_boxes[i, -1] >= args.thresh:
                 #boi[i] = original_boxes[i]
-                boi = np.append(boi, [original_boxes[i]], axis=0)
+                boi = np.append(boi, [original_boxes[i].astype(int)], axis=0)
 
-        track_bbs_ids = tracker.update(boi, frame_num)
+        for tracker in trackers:
+            track_bbs_ids = tracker.update(boi, frame_num)
         
 
         ids_in_frame = set(track_bbs_ids[:, -1])
@@ -342,7 +349,6 @@ def main(args):
                 id_to_color[uid] = all_colors[color_i]
                 color_i = (color_i + 1) % len(all_colors)
         
-        local_results.append(track_bbs_ids[:, -1].tolist())
         new_ids = seen.symmetric_difference(ids_in_frame)
 
         ids_fig = vis_utils.vis_sort(
@@ -358,10 +364,14 @@ def main(args):
         ids_fig.savefig(ids_frame_path, dpi=200)
         plt.close('all')
 
-    tracker.write_watch_results()
+    results = {}
+    for tracker in trackers:
+        name = tracker.get_name()
+        watch_results = tracker.get_watch_results()
+        results[name] = watch_results
     import json
-    with open('./local_results', 'w') as f:
-        f.write(json.dumps(local_results))
+    with open(os.path.join(video_dir, 'watch_results.json'), 'w') as f:
+        f.write(json.dumps(results))
 
     info("Rebuilding video...")
 
