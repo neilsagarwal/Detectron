@@ -1,4 +1,6 @@
+from __future__ import absolute_import
 from collections import OrderedDict
+
 from scipy.spatial.distance import cdist as pairwise_dist
 import numpy as np
 from enum import Enum
@@ -6,6 +8,7 @@ from enum import Enum
 import sys
 sys.path.append("/home/ubuntu/sort")
 import sort
+
 
 def find_centroid(box):
     x,y,w,h,_ = box
