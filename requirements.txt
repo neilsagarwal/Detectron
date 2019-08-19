@@ -9,3 +9,6 @@ scipy
 six
 future
 protobuf
+tqdm>=4.34.0
+termcolor>=1.1.0
+filterpy>=1.4.5
